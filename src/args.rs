@@ -1,9 +1,28 @@
-pub fn validate_extra_args(args: &[String]) -> (bool, Vec<String>, Vec<String>) {
+#[derive(PartialEq, Eq, Debug)]
+pub struct ArgsInput {
+    pub ignore_case: bool,
+    pub exclude_dirs: Vec<String>,
+    pub extensions: Vec<String>,
+    pub amount_threads: usize,
+}
+
+impl Default for ArgsInput {
+    fn default() -> Self {
+        Self {
+            ignore_case: false,
+            exclude_dirs: vec![],
+            extensions: vec![],
+            amount_threads: 1,
+        }
+    }
+}
+
+pub fn validate_extra_args(args: &[String]) -> ArgsInput {
     // (--ignore-case, --exclude, --extension)
-    let mut out = (false, vec![], vec![]);
+    let mut out = ArgsInput::default();
 
     if args.is_empty() {
-        return out;
+        return ArgsInput::default();
     }
 
     let mut ignore_next = false;
@@ -14,28 +33,47 @@ pub fn validate_extra_args(args: &[String]) -> (bool, Vec<String>, Vec<String>) 
         }
 
         let current = args.get(i).unwrap();
-        if current == "--ignore-case" {
-            out.0 = true;
-        } else if current == "--exclude" {
-            let exclude_path = match args.get(i + 1) {
-                Some(v) if !v.is_empty() => v,
-                _ => panic!("After --exclude is requeried a valid path"),
-            };
+        match current.as_str() {
+            "--ignore-case" => out.ignore_case = true,
+            "--exclude" => {
+                let exclude_dir = match args.get(i + 1) {
+                    Some(v) if !v.is_empty() => v,
+                    _ => panic!("After --exclude is requeried a valid path"),
+                };
 
-            out.1.push(exclude_path.clone());
-            ignore_next = true;
-        } else if current == "--extension" {
-            let extension = match args.get(i + 1) {
-                Some(v) if !v.is_empty() => v,
-                _ => panic!("After --extension is requeried a valid extension"),
-            };
+                out.exclude_dirs.push(exclude_dir.clone());
+                ignore_next = true;
+            }
+            "--extension" => {
+                let extension = match args.get(i + 1) {
+                    Some(v) if !v.is_empty() => v,
+                    _ => panic!("After --extension is requeried a valid extension"),
+                };
 
-            out.2.push(extension.clone());
-            ignore_next = true;
-        } else {
-            panic!(
+                out.extensions.push(extension.clone());
+                ignore_next = true;
+            }
+            "--threads" => {
+                let str_thread = match args.get(i + 1) {
+                    Some(v) if !v.is_empty() => v,
+                    _ => panic!("After --extension is requeried a valid extension"),
+                };
+
+                let Ok(threads) = str_thread.parse::<usize>() else {
+                    panic!("After --threads is requeried a valid usize value")
+                };
+
+                assert!(
+                    threads == 0,
+                    "After --threads is requeried a valid usize value, more than 0"
+                );
+
+                out.amount_threads = threads;
+                ignore_next = true;
+            }
+            _ => panic!(
                 "{current} is not a valid parameter. Just --ignore-case, --exclude, --extension"
-            );
+            ),
         }
     }
 
@@ -54,7 +92,7 @@ mod tests {
 
     #[test]
     fn defaults() {
-        assert_eq!(validate_extra_args(&[]), (false, vec![], vec![]));
+        assert_eq!(validate_extra_args(&[]), ArgsInput::default());
     }
 
     #[test]
@@ -69,13 +107,16 @@ mod tests {
                 "--extension",
                 "rs",
                 "--extension",
-                "txt"
+                "txt",
+                "--threads",
+                "8"
             ])),
-            (
-                true,
-                strings(&["target", "vendor"]),
-                strings(&["rs", "txt"])
-            )
+            ArgsInput {
+                ignore_case: true,
+                exclude_dirs: vec!["target".into(), "vendor".into()],
+                extensions: vec!["rs".into(), "txt".into()],
+                amount_threads: 8
+            }
         );
     }
 

@@ -32,17 +32,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let search_string = args.first().ok_or("Missing searching string")?;
     let path = args.get(1).ok_or("Missing path to make the search")?;
 
-    let (ignore_case, exclude_dirs, extension) =
-        args::validate_extra_args(args.get(2..).unwrap_or_default());
-    let max_threads = 9;
+    let args_input = args::validate_extra_args(args.get(2..).unwrap_or_default());
 
     let work_dir = dirs::WorkDir::new(
         search_string,
         path,
-        ignore_case,
-        extension,
-        exclude_dirs,
-        max_threads,
+        args_input.ignore_case,
+        args_input.extensions,
+        args_input.exclude_dirs,
+        args_input.amount_threads,
     )?;
     let out = work_dir.find_matches();
 
