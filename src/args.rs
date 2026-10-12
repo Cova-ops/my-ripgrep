@@ -41,3 +41,59 @@ pub fn validate_extra_args(args: &[String]) -> (bool, Vec<String>, Vec<String>) 
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn strings(values: &[&str]) -> Vec<String> {
+        values
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn defaults() {
+        assert_eq!(validate_extra_args(&[]), (false, vec![], vec![]));
+    }
+
+    #[test]
+    fn parses_all_options_and_repeated_values() {
+        assert_eq!(
+            validate_extra_args(&strings(&[
+                "--ignore-case",
+                "--exclude",
+                "target",
+                "--exclude",
+                "vendor",
+                "--extension",
+                "rs",
+                "--extension",
+                "txt"
+            ])),
+            (
+                true,
+                strings(&["target", "vendor"]),
+                strings(&["rs", "txt"])
+            )
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not a valid parameter")]
+    fn rejects_unknown_option() {
+        validate_extra_args(&strings(&["--unknown"]));
+    }
+
+    #[test]
+    #[should_panic(expected = "valid path")]
+    fn rejects_missing_exclusion() {
+        validate_extra_args(&strings(&["--exclude"]));
+    }
+
+    #[test]
+    #[should_panic(expected = "valid extension")]
+    fn rejects_empty_extension() {
+        validate_extra_args(&strings(&["--extension", ""]));
+    }
+}

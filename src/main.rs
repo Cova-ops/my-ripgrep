@@ -32,7 +32,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let search_string = args.first().ok_or("Missing searching string")?;
     let path = args.get(1).ok_or("Missing path to make the search")?;
 
-    println!("{args:#?}");
     let (ignore_case, exclude_dirs, extension) =
         args::validate_extra_args(args.get(2..).unwrap_or_default());
     let max_threads = 9;

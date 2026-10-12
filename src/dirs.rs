@@ -45,11 +45,6 @@ impl File {
     }
 
     fn search_match(&self, to_search: &str) -> Option<(Vec<String>, u32)> {
-        // if self.check_valid_extension() == false {
-        //     // println!("Skipping {} file", self.path.display());
-        //     return None;
-        // }
-
         let file = fs::File::open(&self.path).ok()?;
         let mut reader = BufReader::new(file);
 
@@ -114,8 +109,6 @@ impl<'a> Directory<'a> {
             return false; // Included this, maybe is root path
         };
 
-        // println!("dir_name: {dir_name:?}");
-
         match dir_name.to_str() {
             Some(name) if exclude_dirs.iter().any(|exclude| exclude == name) => true,
             _ => false, // If dir's name is not UTF-8, should be included
@@ -124,7 +117,6 @@ impl<'a> Directory<'a> {
 
     fn get_all_files(&self) -> Vec<File> {
         if self.check_excluded_dir() {
-            // println!("Ignoring {} dir", self.path.display());
             return vec![];
         }
 
@@ -309,100 +301,110 @@ impl ResultSearch {
 }
 
 #[cfg(test)]
-mod test_work_dir {
+mod tests {
     use super::*;
+    use tempfile::tempdir;
 
-    static ROOT_PATH: &str = "logs";
+    #[test]
+    fn extension_filter() {
+        let allowed = Some(Arc::new(vec!["rs".to_string()]));
+        assert!(File::new("main.rs".into(), allowed.clone(), false).check_valid_extension());
+        assert!(!File::new("main.txt".into(), allowed.clone(), false).check_valid_extension());
+        assert!(!File::new("README".into(), allowed, false).check_valid_extension());
+        assert!(File::new("README".into(), None, false).check_valid_extension());
+    }
 
-    mod e2e {
-        use super::*;
+    #[test]
+    fn matches_report_line_numbers_and_case() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("app.log");
+        fs::write(&path, "INFO start\nERROR first\nerror second\n").unwrap();
+        let (matches, lines) = File::new(path.clone(), None, false)
+            .search_match("ERROR")
+            .unwrap();
+        assert_eq!(lines, 3);
+        assert_eq!(matches, vec![format!("{}:2: ERROR first", path.display())]);
+        let (matches, _) = File::new(path, None, true).search_match("error").unwrap();
+        assert_eq!(matches.len(), 2);
+    }
 
-        #[test]
-        fn search_file() -> Result<(), String> {
-            let to_search = "ERROR";
-            let file = format!("{ROOT_PATH}/app.log");
+    #[test]
+    fn unreadable_or_missing_file_returns_none() {
+        assert!(
+            File::new("does-not-exist.log".into(), None, false)
+                .search_match("x")
+                .is_none()
+        );
+    }
 
-            let work = WorkDir::new(to_search, &file, false, vec![], vec![], 1)?;
-            let result = work.find_matches();
+    #[test]
+    fn recursively_filters_directories_and_extensions() {
+        let tmp = tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("archive")).unwrap();
+        fs::create_dir_all(tmp.path().join("target")).unwrap();
+        fs::write(tmp.path().join("app.log"), "ERROR").unwrap();
+        fs::write(tmp.path().join("notes.txt"), "ERROR").unwrap();
+        fs::write(tmp.path().join("archive/old.log"), "ERROR").unwrap();
+        fs::write(tmp.path().join("target/ignored.log"), "ERROR").unwrap();
+        let dir = Directory {
+            path: tmp.path(),
+            ignore_case: false,
+            exclude_dirs: Some(Arc::new(vec!["target".into()])),
+            extension: Some(Arc::new(vec!["log".into()])),
+        };
+        let files = dir.get_all_files();
+        let names: std::collections::HashSet<_> = files
+            .iter()
+            .map(|f| f.path.strip_prefix(tmp.path()).unwrap().to_path_buf())
+            .collect();
+        assert_eq!(
+            names,
+            [PathBuf::from("app.log"), PathBuf::from("archive/old.log")]
+                .into_iter()
+                .collect()
+        );
+    }
 
-            assert!(result.contains("2026-07-01 10:15:26 ERROR Connection timeout"));
-            assert!(result.contains("2026-07-01 10:15:34 ERROR Database unreachable"));
-
-            Ok(())
-        }
-
-        #[test]
-        fn only_extension() -> Result<(), String> {
-            let to_search = "ERROR";
-
-            let work = WorkDir::new(to_search, ROOT_PATH, false, vec!["txt".into()], vec![], 1)?;
-            let result = work.find_matches();
-
-            assert!(result.contains("2026-07-01 ERROR Invalid password"));
-            assert!(result.contains("2026-07-01 ERROR User not found"));
-
-            Ok(())
-        }
-
-        #[test]
-        fn ignore_case() -> Result<(), String> {
-            let to_search = "error";
-
-            let work = WorkDir::new(to_search, ROOT_PATH, true, vec![], vec![], 1)?;
-            let result = work.find_matches();
-
-            let correct_result = [
-                "logs/app.log:3: 2026-07-01 10:15:26 ERROR Connection timeout",
-                "logs/app.log:5: 2026-07-01 10:15:34 ERROR Database unreachable",
-                "logs/archive/old.log:2: 2025-01-12 ERROR Disk full",
-                "logs/archive/old.log:3: 2025-01-12 ERROR Could not finish backup",
-                "logs/archive/old2.log:1: ERROR First error",
-                "logs/archive/old2.log:3: ERROR Second error",
-                "logs/archive/old2.log:4: ERROR Third error",
-                "logs/auth.txt:3: 2026-07-01 ERROR Invalid password",
-                "logs/auth.txt:4: 2026-07-01 ERROR User not found",
-                "logs/db.log:4: 2026-07-01 ERROR Deadlock detected",
-                "logs/db.log:6: 2026-07-01 ERROR Could not acquire lock",
-                "logs/target/ignored.log:1: ERROR This file should never be scanned",
-            ];
-
-            for (line, correct) in result.split('\n').zip(correct_result) {
-                assert_eq!(line, correct);
-            }
-
-            Ok(())
-        }
-
-        #[test]
-        fn exclude_dirs() -> Result<(), String> {
-            let to_search = "ERROR";
-
-            let work = WorkDir::new(
-                to_search,
-                ROOT_PATH,
+    #[test]
+    fn workdir_rejects_nonexistent_path() {
+        let tmp = tempdir().unwrap();
+        assert!(
+            WorkDir::new(
+                "x",
+                &tmp.path().join("missing").to_string_lossy(),
                 false,
                 vec![],
-                vec!["archive".into()],
-                1,
-            )?;
-            let result = work.find_matches();
+                vec![],
+                1
+            )
+            .is_err()
+        );
+    }
 
-            let correct_result = [
-                "logs/app.log:3: 2026-07-01 10:15:26 ERROR Connection timeout",
-                "logs/app.log:5: 2026-07-01 10:15:34 ERROR Database unreachable",
-                "logs/auth.txt:3: 2026-07-01 ERROR Invalid password",
-                "logs/auth.txt:4: 2026-07-01 ERROR User not found",
-                "logs/db.log:4: 2026-07-01 ERROR Deadlock detected",
-                "logs/db.log:6: 2026-07-01 ERROR Could not acquire lock",
-                "logs/target/ignored.log:1: ERROR This file should never be scanned",
-            ];
+    #[test]
+    fn workdir_searches_single_file() {
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("app.log");
+        fs::write(&path, "ERROR here\nINFO there\n").unwrap();
+        let result = WorkDir::new("ERROR", &path.to_string_lossy(), false, vec![], vec![], 1)
+            .unwrap()
+            .find_matches();
+        assert!(result.contains("app.log:1: ERROR here"));
+        assert!(result.contains("Amount files: 1 -- Amount lines: 2 -- Amount matches: 1"));
+    }
 
-            println!("result: {result:#?}");
-            for (line, correct) in result.split('\n').zip(correct_result) {
-                assert_eq!(line, correct);
-            }
-
-            Ok(())
+    #[test]
+    fn result_format_includes_counts() {
+        let result = ResultSearch {
+            amount_files: 2,
+            amount_lines: 3,
+            elapsed_time: Duration::from_micros(5),
+            matches: vec!["a:1: hit".into()],
         }
+        .show_results();
+        assert!(result.contains("a:1: hit"));
+        assert!(result.contains(
+            "Amount files: 2 -- Amount lines: 3 -- Amount matches: 1 -- Time: 5 microseconds."
+        ));
     }
 }
