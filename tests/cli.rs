@@ -52,6 +52,8 @@ fn cli_respects_combined_filters() {
         "target",
         "--extension",
         "log",
+        "--threads",
+        "2",
     ]);
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();

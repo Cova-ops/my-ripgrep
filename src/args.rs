@@ -64,7 +64,7 @@ pub fn validate_extra_args(args: &[String]) -> ArgsInput {
                 };
 
                 assert!(
-                    threads == 0,
+                    threads != 0,
                     "After --threads is requeried a valid usize value, more than 0"
                 );
 
