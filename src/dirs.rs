@@ -18,7 +18,7 @@ struct File {
 }
 
 impl File {
-    fn new(path: PathBuf, extension: Option<Arc<Vec<String>>>, ignore_case: bool) -> Self {
+    const fn new(path: PathBuf, extension: Option<Arc<Vec<String>>>, ignore_case: bool) -> Self {
         Self {
             path,
             extension,
@@ -33,9 +33,8 @@ impl File {
         }
 
         let extension = self.extension.as_ref().unwrap();
-        let file_ext = match self.path.extension() {
-            Some(v) => v,
-            _ => return false, // The file does not have extension
+        let Some(file_ext) = self.path.extension() else {
+            return false; // The file does not have extension
         };
 
         match file_ext.to_str() {
@@ -71,10 +70,10 @@ impl File {
 
             cont += 1;
 
-            let matched = match normalized_search.as_ref() {
-                Some(v) => line.to_ascii_lowercase().contains(v),
-                None => line.contains(to_search),
-            };
+            let matched = normalized_search.as_ref().map_or_else(
+                || line.contains(to_search),
+                |v| line.to_ascii_lowercase().contains(v),
+            );
 
             if matched {
                 out.push(format!("{}:{}: {}", self.path.display(), cont, line.trim()));
@@ -111,9 +110,8 @@ impl<'a> Directory<'a> {
 
         let exclude_dirs = self.exclude_dirs.as_ref().unwrap();
 
-        let dir_name = match self.path.file_name() {
-            Some(v) => v,
-            _ => return false, // Included this, maybe is root path
+        let Some(dir_name) = self.path.file_name() else {
+            return false; // Included this, maybe is root path
         };
 
         // println!("dir_name: {dir_name:?}");
@@ -125,23 +123,19 @@ impl<'a> Directory<'a> {
     }
 
     fn get_all_files(&self) -> Vec<File> {
-        if self.check_excluded_dir() == true {
+        if self.check_excluded_dir() {
             // println!("Ignoring {} dir", self.path.display());
             return vec![];
         }
 
-        let dir = fs::read_dir(&self.path).unwrap();
+        let dir = fs::read_dir(self.path).unwrap();
 
         let mut out: Vec<File> = vec![];
         for entry in dir {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => continue,
-            };
+            let Ok(entry) = entry else { continue };
 
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(_) => continue,
+            let Ok(file_type) = entry.file_type() else {
+                continue;
             };
 
             let entry_path = entry.path();
@@ -151,10 +145,11 @@ impl<'a> Directory<'a> {
                 let mut new_vec = new_dir.get_all_files();
                 out.append(&mut new_vec);
             } else if file_type.is_file() {
-                let ext_ref = self.extension.as_ref().map(|v| v.clone());
+                let ext_ref = self.extension.as_ref().map(std::clone::Clone::clone);
                 let new_file = File::new(entry_path, ext_ref, self.ignore_case);
+
                 let valid_ext = new_file.check_valid_extension();
-                if valid_ext == false {
+                if !valid_ext {
                     continue;
                 }
 
@@ -164,34 +159,6 @@ impl<'a> Directory<'a> {
 
         out
     }
-
-    // fn search_match(&self, to_search: &str) -> Vec<String> {
-    //     let dir = fs::read_dir(&self.path).unwrap();
-    //
-    //     let mut out: Vec<String> = vec![];
-    //     for entry in dir {
-    //         let entry_path = entry.unwrap().path();
-    //
-    //         if entry_path.is_dir() {
-    //             let new_dir = self.new_from_self(entry_path);
-    //             let mut new_vec = new_dir.search_match(to_search);
-    //             out.append(&mut new_vec);
-    //         } else {
-    //             let ext_ref = self
-    //                 .extension
-    //                 .as_ref()
-    //                 .map(|v| v.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-    //
-    //             let new_file = File::new(entry_path, ext_ref.as_deref());
-    //             let new_vec = new_file.search_match(to_search);
-    //             if new_vec.is_some() {
-    //                 out.append(&mut new_vec.unwrap());
-    //             }
-    //         }
-    //     }
-    //
-    //     out
-    // }
 }
 
 #[derive(Debug)]
@@ -215,20 +182,20 @@ impl WorkDir {
     ) -> Result<Self, String> {
         let root_path = PathBuf::from(raw_path);
 
-        if root_path.exists() == false {
+        if !root_path.exists() {
             return Err("Route doesn't exists. Review that.".into());
         }
 
-        let extension = if extension.len() > 0 {
-            Some(Arc::new(extension))
-        } else {
+        let extension = if extension.is_empty() {
             None
+        } else {
+            Some(Arc::new(extension))
         };
 
-        let exclude_dirs = if exclude_dirs.len() > 0 {
-            Some(Arc::new(exclude_dirs))
-        } else {
+        let exclude_dirs = if exclude_dirs.is_empty() {
             None
+        } else {
+            Some(Arc::new(exclude_dirs))
         };
 
         Ok(Self {
@@ -241,11 +208,11 @@ impl WorkDir {
         })
     }
 
-    pub fn find_matches(&self) -> Result<String, String> {
+    pub fn find_matches(&self) -> String {
         let start = Instant::now();
 
-        if self.root_path.is_file() == true {
-            let ext_ref = self.extension.as_ref().map(|v| Arc::clone(&v));
+        if self.root_path.is_file() {
+            let ext_ref = self.extension.as_ref().map(std::clone::Clone::clone);
 
             let (matches, amount_lines) =
                 File::new(self.root_path.clone(), ext_ref, self.ignore_case)
@@ -260,13 +227,13 @@ impl WorkDir {
                 matches,
             };
 
-            return Ok(result.show_results());
+            return result.show_results();
         }
 
         let dir = Directory {
             path: self.root_path.as_path(),
             exclude_dirs: self.exclude_dirs.clone(),
-            ignore_case: self.ignore_case.clone(),
+            ignore_case: self.ignore_case,
             extension: self.extension.clone(),
         };
 
@@ -285,15 +252,12 @@ impl WorkDir {
         let mut amount_files = 0;
         let mut amount_lines = 0;
 
-        for mat in vec_threads.into_iter() {
+        for mat in vec_threads {
             amount_files += 1;
 
-            match mat {
-                Some((mut matches, lines)) => {
-                    vec_matches.append(&mut matches);
-                    amount_lines += lines;
-                }
-                None => (),
+            if let Some((mut matches, lines)) = mat {
+                vec_matches.append(&mut matches);
+                amount_lines += lines;
             }
         }
 
@@ -306,7 +270,7 @@ impl WorkDir {
             elapsed_time,
         };
 
-        Ok(result.show_results())
+        result.show_results()
     }
 }
 
@@ -359,7 +323,7 @@ mod test_work_dir {
             let file = format!("{ROOT_PATH}/app.log");
 
             let work = WorkDir::new(to_search, &file, false, vec![], vec![], 1)?;
-            let result = work.find_matches()?;
+            let result = work.find_matches();
 
             assert!(result.contains("2026-07-01 10:15:26 ERROR Connection timeout"));
             assert!(result.contains("2026-07-01 10:15:34 ERROR Database unreachable"));
@@ -372,7 +336,7 @@ mod test_work_dir {
             let to_search = "ERROR";
 
             let work = WorkDir::new(to_search, ROOT_PATH, false, vec!["txt".into()], vec![], 1)?;
-            let result = work.find_matches()?;
+            let result = work.find_matches();
 
             assert!(result.contains("2026-07-01 ERROR Invalid password"));
             assert!(result.contains("2026-07-01 ERROR User not found"));
@@ -385,7 +349,7 @@ mod test_work_dir {
             let to_search = "error";
 
             let work = WorkDir::new(to_search, ROOT_PATH, true, vec![], vec![], 1)?;
-            let result = work.find_matches()?;
+            let result = work.find_matches();
 
             let correct_result = [
                 "logs/app.log:3: 2026-07-01 10:15:26 ERROR Connection timeout",
@@ -402,11 +366,7 @@ mod test_work_dir {
                 "logs/target/ignored.log:1: ERROR This file should never be scanned",
             ];
 
-            for (line, correct) in result
-                .split("\n")
-                .into_iter()
-                .zip(correct_result.into_iter())
-            {
+            for (line, correct) in result.split('\n').zip(correct_result) {
                 assert_eq!(line, correct);
             }
 
@@ -425,7 +385,7 @@ mod test_work_dir {
                 vec!["archive".into()],
                 1,
             )?;
-            let result = work.find_matches()?;
+            let result = work.find_matches();
 
             let correct_result = [
                 "logs/app.log:3: 2026-07-01 10:15:26 ERROR Connection timeout",
@@ -437,11 +397,8 @@ mod test_work_dir {
                 "logs/target/ignored.log:1: ERROR This file should never be scanned",
             ];
 
-            for (line, correct) in result
-                .split("\n")
-                .into_iter()
-                .zip(correct_result.into_iter())
-            {
+            println!("result: {result:#?}");
+            for (line, correct) in result.split('\n').zip(correct_result) {
                 assert_eq!(line, correct);
             }
 

@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = std::env::args();
     let args: Vec<_> = args.into_iter().collect();
 
-    let search_string = args.get(0).ok_or("Missing searching string")?;
+    let search_string = args.first().ok_or("Missing searching string")?;
     let path = args.get(1).ok_or("Missing path to make the search")?;
 
     let (ignore_case, exclude_dirs, extension) =
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         exclude_dirs,
         max_threads,
     )?;
-    let out = work_dir.find_matches()?;
+    let out = work_dir.find_matches();
 
     println!("{out}");
 

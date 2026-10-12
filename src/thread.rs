@@ -32,7 +32,7 @@ where
                 match msg {
                     Ok(v) => out.push(v),
                     Err(_) => break,
-                };
+                }
             }
 
             out
