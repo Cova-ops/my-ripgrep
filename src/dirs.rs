@@ -53,6 +53,7 @@ impl File {
         let mut out: Vec<String> = vec![];
         let mut cont = 0;
         let mut line = String::new();
+        let path = self.path.display().to_string();
 
         loop {
             line.clear();
@@ -71,7 +72,7 @@ impl File {
             );
 
             if matched {
-                out.push(format!("{}:{}: {}", self.path.display(), cont, line.trim()));
+                out.push(format!("{}:{}: {}", path, cont, line.trim()));
             }
         }
 
