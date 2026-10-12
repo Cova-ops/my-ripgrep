@@ -1,0 +1,6 @@
+2026-07-01 10:15:22 INFO Starting application
+2026-07-01 10:15:24 INFO Loading configuration
+2026-07-01 10:15:26 ERROR Connection timeout
+2026-07-01 10:15:30 INFO Retry connection
+2026-07-01 10:15:34 ERROR Database unreachable
+2026-07-01 10:15:38 INFO Shutdown completed

@@ -1,0 +1,5 @@
+ERROR First error
+INFO Normal line
+ERROR Second error
+ERROR Third error
+INFO Finished

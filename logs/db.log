@@ -1,0 +1,7 @@
+2026-07-01 INFO Database started
+2026-07-01 INFO Running migrations
+2026-07-01 WARN Slow query detected
+2026-07-01 ERROR Deadlock detected
+2026-07-01 INFO Query completed
+2026-07-01 ERROR Could not acquire lock
+2026-07-01 INFO Closing connection

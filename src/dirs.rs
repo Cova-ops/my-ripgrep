@@ -1,0 +1,451 @@
+use std::fmt::Write;
+use std::{
+    fs::{self},
+    io::{BufRead, BufReader},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
+    vec,
+};
+
+use crate::thread;
+
+#[derive(Debug)]
+struct File {
+    path: PathBuf,
+    extension: Option<Arc<Vec<String>>>,
+    ignore_case: bool,
+}
+
+impl File {
+    fn new(path: PathBuf, extension: Option<Arc<Vec<String>>>, ignore_case: bool) -> Self {
+        Self {
+            path,
+            extension,
+            ignore_case,
+        }
+    }
+
+    /// Check if this file should be included
+    fn check_valid_extension(&self) -> bool {
+        if self.extension.is_none() {
+            return true;
+        }
+
+        let extension = self.extension.as_ref().unwrap();
+        let file_ext = match self.path.extension() {
+            Some(v) => v,
+            _ => return false, // The file does not have extension
+        };
+
+        match file_ext.to_str() {
+            Some(v) if extension.iter().any(|ext| ext == v) => true,
+            None => true, // The extension is not in UTF-8, should be included
+            _ => false,
+        }
+    }
+
+    fn search_match(&self, to_search: &str) -> Option<(Vec<String>, u32)> {
+        // if self.check_valid_extension() == false {
+        //     // println!("Skipping {} file", self.path.display());
+        //     return None;
+        // }
+
+        let file = fs::File::open(&self.path).ok()?;
+        let mut reader = BufReader::new(file);
+
+        let normalized_search = self.ignore_case.then(|| to_search.to_ascii_lowercase());
+
+        let mut out: Vec<String> = vec![];
+        let mut cont = 0;
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+
+            let bytes_read = reader.read_line(&mut line).ok()?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            cont += 1;
+
+            let matched = match normalized_search.as_ref() {
+                Some(v) => line.to_ascii_lowercase().contains(v),
+                None => line.contains(to_search),
+            };
+
+            if matched {
+                out.push(format!("{}:{}: {}", self.path.display(), cont, line.trim()));
+            }
+        }
+
+        Some((out, cont))
+    }
+}
+
+#[derive(Debug)]
+struct Directory<'a> {
+    path: &'a Path,
+    ignore_case: bool,
+    exclude_dirs: Option<Arc<Vec<String>>>,
+    extension: Option<Arc<Vec<String>>>,
+}
+
+impl<'a> Directory<'a> {
+    fn new_from_self(&self, path: &'a Path) -> Self {
+        Self {
+            path,
+            ignore_case: self.ignore_case,
+            exclude_dirs: self.exclude_dirs.clone(),
+            extension: self.extension.clone(),
+        }
+    }
+
+    /// Check if this dir should be excluded
+    fn check_excluded_dir(&self) -> bool {
+        if self.exclude_dirs.is_none() {
+            return false;
+        }
+
+        let exclude_dirs = self.exclude_dirs.as_ref().unwrap();
+
+        let dir_name = match self.path.file_name() {
+            Some(v) => v,
+            _ => return false, // Included this, maybe is root path
+        };
+
+        // println!("dir_name: {dir_name:?}");
+
+        match dir_name.to_str() {
+            Some(name) if exclude_dirs.iter().any(|exclude| exclude == name) => true,
+            _ => false, // If dir's name is not UTF-8, should be included
+        }
+    }
+
+    fn get_all_files(&self) -> Vec<File> {
+        if self.check_excluded_dir() == true {
+            // println!("Ignoring {} dir", self.path.display());
+            return vec![];
+        }
+
+        let dir = fs::read_dir(&self.path).unwrap();
+
+        let mut out: Vec<File> = vec![];
+        for entry in dir {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+
+            let entry_path = entry.path();
+
+            if file_type.is_dir() {
+                let new_dir = self.new_from_self(entry_path.as_path());
+                let mut new_vec = new_dir.get_all_files();
+                out.append(&mut new_vec);
+            } else if file_type.is_file() {
+                let ext_ref = self.extension.as_ref().map(|v| v.clone());
+                let new_file = File::new(entry_path, ext_ref, self.ignore_case);
+                let valid_ext = new_file.check_valid_extension();
+                if valid_ext == false {
+                    continue;
+                }
+
+                out.push(new_file);
+            }
+        }
+
+        out
+    }
+
+    // fn search_match(&self, to_search: &str) -> Vec<String> {
+    //     let dir = fs::read_dir(&self.path).unwrap();
+    //
+    //     let mut out: Vec<String> = vec![];
+    //     for entry in dir {
+    //         let entry_path = entry.unwrap().path();
+    //
+    //         if entry_path.is_dir() {
+    //             let new_dir = self.new_from_self(entry_path);
+    //             let mut new_vec = new_dir.search_match(to_search);
+    //             out.append(&mut new_vec);
+    //         } else {
+    //             let ext_ref = self
+    //                 .extension
+    //                 .as_ref()
+    //                 .map(|v| v.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    //
+    //             let new_file = File::new(entry_path, ext_ref.as_deref());
+    //             let new_vec = new_file.search_match(to_search);
+    //             if new_vec.is_some() {
+    //                 out.append(&mut new_vec.unwrap());
+    //             }
+    //         }
+    //     }
+    //
+    //     out
+    // }
+}
+
+#[derive(Debug)]
+pub struct WorkDir {
+    to_search: String,
+    root_path: PathBuf,
+    ignore_case: bool,
+    extension: Option<Arc<Vec<String>>>,
+    exclude_dirs: Option<Arc<Vec<String>>>,
+    max_threads: usize,
+}
+
+impl WorkDir {
+    pub fn new(
+        to_search: &str,
+        raw_path: &str,
+        ignore_case: bool,
+        extension: Vec<String>,
+        exclude_dirs: Vec<String>,
+        max_threads: usize,
+    ) -> Result<Self, String> {
+        let root_path = PathBuf::from(raw_path);
+
+        if root_path.exists() == false {
+            return Err("Route doesn't exists. Review that.".into());
+        }
+
+        let extension = if extension.len() > 0 {
+            Some(Arc::new(extension))
+        } else {
+            None
+        };
+
+        let exclude_dirs = if exclude_dirs.len() > 0 {
+            Some(Arc::new(exclude_dirs))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            to_search: to_search.to_owned(),
+            root_path,
+            ignore_case,
+            extension,
+            exclude_dirs,
+            max_threads,
+        })
+    }
+
+    pub fn find_matches(&self) -> Result<String, String> {
+        let start = Instant::now();
+
+        if self.root_path.is_file() == true {
+            let ext_ref = self.extension.as_ref().map(|v| Arc::clone(&v));
+
+            let (matches, amount_lines) =
+                File::new(self.root_path.clone(), ext_ref, self.ignore_case)
+                    .search_match(&self.to_search)
+                    .unwrap_or_default();
+            let elapsed_time: Duration = start.elapsed();
+
+            let result = ResultSearch {
+                amount_files: 1,
+                amount_lines,
+                elapsed_time,
+                matches,
+            };
+
+            return Ok(result.show_results());
+        }
+
+        let dir = Directory {
+            path: self.root_path.as_path(),
+            exclude_dirs: self.exclude_dirs.clone(),
+            ignore_case: self.ignore_case.clone(),
+            extension: self.extension.clone(),
+        };
+
+        let files = dir.get_all_files();
+        let pool = thread::ThreadPool::new(self.max_threads);
+
+        let to_search_arc = Arc::new(self.to_search.clone());
+        for file in files {
+            let lock = Arc::clone(&to_search_arc);
+            pool.execute(move || file.search_match(lock.as_ref()));
+        }
+
+        let vec_threads = pool.join();
+
+        let mut vec_matches = vec![];
+        let mut amount_files = 0;
+        let mut amount_lines = 0;
+
+        for mat in vec_threads.into_iter() {
+            amount_files += 1;
+
+            match mat {
+                Some((mut matches, lines)) => {
+                    vec_matches.append(&mut matches);
+                    amount_lines += lines;
+                }
+                None => (),
+            }
+        }
+
+        let elapsed_time: Duration = start.elapsed();
+
+        let result = ResultSearch {
+            amount_lines,
+            amount_files,
+            matches: vec_matches,
+            elapsed_time,
+        };
+
+        Ok(result.show_results())
+    }
+}
+
+struct ResultSearch {
+    amount_files: u32,
+    amount_lines: u32,
+    elapsed_time: Duration,
+    matches: Vec<String>,
+}
+
+impl ResultSearch {
+    pub fn show_results(mut self) -> String {
+        let amount_matches = self.matches.len();
+        let mut out = String::new();
+
+        if cfg!(test) {
+            self.matches.sort();
+        }
+
+        for line in self.matches {
+            let _ = writeln!(out, "{}", line.trim_end());
+        }
+
+        let _ = write!(
+            out,
+            "\nAmount files: {} -- Amount lines: {} \
+         -- Amount matches: {} -- Time: {} microseconds.",
+            self.amount_files,
+            self.amount_lines,
+            amount_matches,
+            self.elapsed_time.as_micros()
+        );
+
+        out
+    }
+}
+
+#[cfg(test)]
+mod test_work_dir {
+    use super::*;
+
+    static ROOT_PATH: &str = "logs";
+
+    mod e2e {
+        use super::*;
+
+        #[test]
+        fn search_file() -> Result<(), String> {
+            let to_search = "ERROR";
+            let file = format!("{ROOT_PATH}/app.log");
+
+            let work = WorkDir::new(to_search, &file, false, vec![], vec![], 1)?;
+            let result = work.find_matches()?;
+
+            assert!(result.contains("2026-07-01 10:15:26 ERROR Connection timeout"));
+            assert!(result.contains("2026-07-01 10:15:34 ERROR Database unreachable"));
+
+            Ok(())
+        }
+
+        #[test]
+        fn only_extension() -> Result<(), String> {
+            let to_search = "ERROR";
+
+            let work = WorkDir::new(to_search, ROOT_PATH, false, vec!["txt".into()], vec![], 1)?;
+            let result = work.find_matches()?;
+
+            assert!(result.contains("2026-07-01 ERROR Invalid password"));
+            assert!(result.contains("2026-07-01 ERROR User not found"));
+
+            Ok(())
+        }
+
+        #[test]
+        fn ignore_case() -> Result<(), String> {
+            let to_search = "error";
+
+            let work = WorkDir::new(to_search, ROOT_PATH, true, vec![], vec![], 1)?;
+            let result = work.find_matches()?;
+
+            let correct_result = [
+                "logs/app.log:3: 2026-07-01 10:15:26 ERROR Connection timeout",
+                "logs/app.log:5: 2026-07-01 10:15:34 ERROR Database unreachable",
+                "logs/archive/old.log:2: 2025-01-12 ERROR Disk full",
+                "logs/archive/old.log:3: 2025-01-12 ERROR Could not finish backup",
+                "logs/archive/old2.log:1: ERROR First error",
+                "logs/archive/old2.log:3: ERROR Second error",
+                "logs/archive/old2.log:4: ERROR Third error",
+                "logs/auth.txt:3: 2026-07-01 ERROR Invalid password",
+                "logs/auth.txt:4: 2026-07-01 ERROR User not found",
+                "logs/db.log:4: 2026-07-01 ERROR Deadlock detected",
+                "logs/db.log:6: 2026-07-01 ERROR Could not acquire lock",
+                "logs/target/ignored.log:1: ERROR This file should never be scanned",
+            ];
+
+            for (line, correct) in result
+                .split("\n")
+                .into_iter()
+                .zip(correct_result.into_iter())
+            {
+                assert_eq!(line, correct);
+            }
+
+            Ok(())
+        }
+
+        #[test]
+        fn exclude_dirs() -> Result<(), String> {
+            let to_search = "ERROR";
+
+            let work = WorkDir::new(
+                to_search,
+                ROOT_PATH,
+                false,
+                vec![],
+                vec!["archive".into()],
+                1,
+            )?;
+            let result = work.find_matches()?;
+
+            let correct_result = [
+                "logs/app.log:3: 2026-07-01 10:15:26 ERROR Connection timeout",
+                "logs/app.log:5: 2026-07-01 10:15:34 ERROR Database unreachable",
+                "logs/auth.txt:3: 2026-07-01 ERROR Invalid password",
+                "logs/auth.txt:4: 2026-07-01 ERROR User not found",
+                "logs/db.log:4: 2026-07-01 ERROR Deadlock detected",
+                "logs/db.log:6: 2026-07-01 ERROR Could not acquire lock",
+                "logs/target/ignored.log:1: ERROR This file should never be scanned",
+            ];
+
+            for (line, correct) in result
+                .split("\n")
+                .into_iter()
+                .zip(correct_result.into_iter())
+            {
+                assert_eq!(line, correct);
+            }
+
+            Ok(())
+        }
+    }
+}

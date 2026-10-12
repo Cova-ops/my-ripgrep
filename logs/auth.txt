@@ -1,0 +1,6 @@
+2026-07-01 INFO User login
+2026-07-01 INFO User logout
+2026-07-01 ERROR Invalid password
+2026-07-01 ERROR User not found
+2026-07-01 INFO Password updated
+2026-07-01 INFO Token generated
