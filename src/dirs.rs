@@ -320,7 +320,7 @@ impl ResultSearch {
         }
 
         for line in self.matches {
-            let _ = writeln!(out, "{}", line);
+            let _ = writeln!(out, "{line}");
         }
 
         let _ = write!(
