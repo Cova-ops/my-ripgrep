@@ -266,7 +266,3 @@ Potential next steps include streaming discovery/results, more robust encoding a
 ## Motivation
 
 `my-ripgrep` is a practical exercise in building a useful tool while understanding **how Rust's ownership model interacts with threads, channels, file I/O, and memory management**. The most valuable outcome is not outperforming a mature tool on a single benchmark; it is being able to explain the architecture, measure trade-offs, find correctness bugs, and improve the implementation based on evidence.
-
-## License
-
-No license is specified in this README. Add a `LICENSE` file if you intend to grant permission for others to reuse or redistribute the project.
