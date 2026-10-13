@@ -44,16 +44,21 @@ impl File {
         }
     }
 
-    fn search_match(&self, to_search: &str) -> Option<(Vec<String>, u32)> {
+    fn search_match(
+        &self,
+        to_search: &str,
+        reader: &mut BufReader<fs::File>,
+    ) -> Option<(Vec<String>, u32)> {
         let file = fs::File::open(&self.path).ok()?;
-        let mut reader = BufReader::new(file);
+
+        reader.consume(reader.buffer().len());
+        *reader.get_mut() = file;
 
         let normalized_search = self.ignore_case.then(|| to_search.to_ascii_lowercase());
 
         let mut out: Vec<String> = vec![];
         let mut cont = 0;
         let mut line = String::new();
-        let path = self.path.display().to_string();
 
         loop {
             line.clear();
@@ -72,7 +77,12 @@ impl File {
             );
 
             if matched {
-                out.push(format!("{}:{}: {}", path, cont, line.trim()));
+                out.push(format!(
+                    "{}:{}:{}",
+                    self.path.display(),
+                    cont,
+                    line.trim_end_matches('\n')
+                ));
             }
         }
 
@@ -116,14 +126,13 @@ impl<'a> Directory<'a> {
         }
     }
 
-    fn get_all_files(&self) -> Vec<File> {
+    fn get_all_files(&self, vec: &mut Vec<File>) {
         if self.check_excluded_dir() {
-            return vec![];
+            return;
         }
 
         let dir = fs::read_dir(self.path).unwrap();
 
-        let mut out: Vec<File> = vec![];
         for entry in dir {
             let Ok(entry) = entry else { continue };
 
@@ -135,8 +144,7 @@ impl<'a> Directory<'a> {
 
             if file_type.is_dir() {
                 let new_dir = self.new_from_self(entry_path.as_path());
-                let mut new_vec = new_dir.get_all_files();
-                out.append(&mut new_vec);
+                new_dir.get_all_files(vec);
             } else if file_type.is_file() {
                 let ext_ref = self.extension.as_ref().map(std::clone::Clone::clone);
                 let new_file = File::new(entry_path, ext_ref, self.ignore_case);
@@ -146,11 +154,9 @@ impl<'a> Directory<'a> {
                     continue;
                 }
 
-                out.push(new_file);
+                vec.push(new_file);
             }
         }
-
-        out
     }
 }
 
@@ -206,10 +212,11 @@ impl WorkDir {
 
         if self.root_path.is_file() {
             let ext_ref = self.extension.as_ref().map(std::clone::Clone::clone);
+            let mut reader = BufReader::new(fs::File::open("/dev/null").unwrap());
 
             let (matches, amount_lines) =
                 File::new(self.root_path.clone(), ext_ref, self.ignore_case)
-                    .search_match(&self.to_search)
+                    .search_match(&self.to_search, &mut reader)
                     .unwrap_or_default();
             let elapsed_time: Duration = start.elapsed();
 
@@ -230,13 +237,43 @@ impl WorkDir {
             extension: self.extension.clone(),
         };
 
-        let files = dir.get_all_files();
-        let pool = thread::ThreadPool::new(self.max_threads);
+        let mut files: Vec<File> = vec![];
+        dir.get_all_files(&mut files);
 
+        let pool = thread::ThreadPool::new(self.max_threads);
+        let mut batch: Vec<_> = vec![];
         let to_search_arc = Arc::new(self.to_search.clone());
+
         for file in files {
+            if batch.len() == 16 {
+                let lock = Arc::clone(&to_search_arc);
+
+                let move_batch: Vec<File> = std::mem::take(&mut batch);
+                pool.execute(move || {
+                    let mut reader = BufReader::new(fs::File::open("/dev/null").unwrap());
+
+                    move_batch
+                        .into_iter()
+                        .filter_map(|v| v.search_match(lock.as_str(), &mut reader))
+                        .collect::<Vec<_>>()
+                });
+            }
+
+            batch.push(file);
+        }
+
+        if !batch.is_empty() {
             let lock = Arc::clone(&to_search_arc);
-            pool.execute(move || file.search_match(lock.as_ref()));
+
+            let move_batch: Vec<File> = std::mem::take(&mut batch);
+            pool.execute(move || {
+                let mut reader = BufReader::new(fs::File::open("/dev/null").unwrap());
+
+                move_batch
+                    .into_iter()
+                    .filter_map(|v| v.search_match(lock.as_str(), &mut reader))
+                    .collect::<Vec<_>>()
+            });
         }
 
         let vec_threads = pool.join();
@@ -245,10 +282,9 @@ impl WorkDir {
         let mut amount_files = 0;
         let mut amount_lines = 0;
 
-        for mat in vec_threads {
-            amount_files += 1;
-
-            if let Some((mut matches, lines)) = mat {
+        for thread in vec_threads {
+            for (mut matches, lines) in thread {
+                amount_files += 1;
                 vec_matches.append(&mut matches);
                 amount_lines += lines;
             }
@@ -284,7 +320,7 @@ impl ResultSearch {
         }
 
         for line in self.matches {
-            let _ = writeln!(out, "{}", line.trim_end());
+            let _ = writeln!(out, "{}", line);
         }
 
         let _ = write!(
@@ -320,20 +356,27 @@ mod tests {
         let tmp = tempdir().unwrap();
         let path = tmp.path().join("app.log");
         fs::write(&path, "INFO start\nERROR first\nerror second\n").unwrap();
+
+        let mut reader = BufReader::new(fs::File::open("/dev/null").unwrap());
         let (matches, lines) = File::new(path.clone(), None, false)
-            .search_match("ERROR")
+            .search_match("ERROR", &mut reader)
             .unwrap();
         assert_eq!(lines, 3);
-        assert_eq!(matches, vec![format!("{}:2: ERROR first", path.display())]);
-        let (matches, _) = File::new(path, None, true).search_match("error").unwrap();
+        assert_eq!(matches, vec![format!("{}:2:ERROR first", path.display())]);
+
+        let mut reader = BufReader::new(fs::File::open("/dev/null").unwrap());
+        let (matches, _) = File::new(path, None, true)
+            .search_match("error", &mut reader)
+            .unwrap();
         assert_eq!(matches.len(), 2);
     }
 
     #[test]
     fn unreadable_or_missing_file_returns_none() {
+        let mut reader = BufReader::new(fs::File::open("/dev/null").unwrap());
         assert!(
             File::new("does-not-exist.log".into(), None, false)
-                .search_match("x")
+                .search_match("x", &mut reader)
                 .is_none()
         );
     }
@@ -353,7 +396,8 @@ mod tests {
             exclude_dirs: Some(Arc::new(vec!["target".into()])),
             extension: Some(Arc::new(vec!["log".into()])),
         };
-        let files = dir.get_all_files();
+        let mut files = vec![];
+        dir.get_all_files(&mut files);
         let names: std::collections::HashSet<_> = files
             .iter()
             .map(|f| f.path.strip_prefix(tmp.path()).unwrap().to_path_buf())
@@ -390,7 +434,7 @@ mod tests {
         let result = WorkDir::new("ERROR", &path.to_string_lossy(), false, vec![], vec![], 1)
             .unwrap()
             .find_matches();
-        assert!(result.contains("app.log:1: ERROR here"));
+        assert!(result.contains("app.log:1:ERROR here"));
         assert!(result.contains("Amount files: 1 -- Amount lines: 2 -- Amount matches: 1"));
     }
 

@@ -1,7 +1,7 @@
 use std::{
     sync::{
         Arc, Mutex,
-        mpsc::{self, Sender},
+        mpsc::{self, Sender, SyncSender},
     },
     thread::JoinHandle,
 };
@@ -10,7 +10,7 @@ use std::{
 pub struct ThreadPool<T> {
     result_thread: JoinHandle<Vec<T>>,
     threads: Vec<JoinHandle<()>>,
-    tx: Option<Sender<Box<dyn FnOnce() -> T + Send + 'static>>>,
+    tx: Option<SyncSender<Box<dyn FnOnce() -> T + Send + 'static>>>,
     tx_result: Option<Sender<T>>,
 }
 
@@ -19,7 +19,7 @@ where
     T: Send + 'static,
 {
     pub fn new(max_threads: usize) -> Self {
-        let (tx, rx) = mpsc::channel::<Box<dyn FnOnce() -> T + Send + 'static>>();
+        let (tx, rx) = mpsc::sync_channel::<Box<dyn FnOnce() -> T + Send + 'static>>(64);
         let (tx_result, rx_result) = mpsc::channel::<T>();
 
         let rx = Arc::new(Mutex::new(rx));

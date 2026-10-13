@@ -38,6 +38,7 @@ fn cli_searches_recursively() {
     ] {
         assert!(stdout.contains(expected), "missing {expected}: {stdout}");
     }
+
     assert!(stdout.contains("Amount files: 4 -- Amount lines: 6 -- Amount matches: 4"));
 }
 
@@ -72,7 +73,7 @@ fn cli_searches_one_file() {
     let output = run(&["ERROR", path.to_str().unwrap()]);
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("app.log:2: ERROR Connection timeout"));
+    assert!(stdout.contains("app.log:2:ERROR Connection timeout"));
     assert!(!stdout.contains("error lowercase"));
 }
 

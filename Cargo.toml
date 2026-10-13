@@ -15,3 +15,6 @@ unsafe_code = "forbid"
 all = "warn"
 pedantic = "warn"
 nursery = "warn"
+
+[profile.release]
+debug = true
